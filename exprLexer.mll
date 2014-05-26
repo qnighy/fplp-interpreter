@@ -16,21 +16,24 @@
       "if", IF;
       "in", IN;
       "let", LET;
+      "match", MATCH;
       "rec", REC;
       "then", THEN;
       "true", TRUE;
+      "with", WITH;
     ];
     tbl
 }
 
 let digit = ['0'-'9']
-let space = ' ' | '\t' | '\r' | '\n'
+let space = ' ' | '\t' | '\r'
 let alpha = ['a'-'z' 'A'-'Z' '_']
 let alnum = alpha | digit
 let ident = alpha alnum*
 
 rule token = parse
   | space+         { token lexbuf }
+  | '\n'           { Lexing.new_line lexbuf; token lexbuf }
   | ident as ident {
       try
         Hashtbl.find kwd_tbl ident
@@ -47,6 +50,7 @@ rule token = parse
   | '/'            { DIVIDES }
   | '<'            { LT }
   | '='            { EQ }
+  | '|'            { VBAR }
   | digit+ as n    { NUM (int_of_string n) }
   | eof            { EOF }
   | _              { raise (LexingError (Loc.loc_from_lexer lexbuf))}

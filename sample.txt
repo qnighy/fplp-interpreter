@@ -12,3 +12,6 @@ even 11;;
 even 10;;
 odd 11;;
 odd 10;;
+match 1 with 1 -> 2;;
+match 2 with 1 -> 2;;
+match 3 with x -> x + 3;;

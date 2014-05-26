@@ -6,8 +6,8 @@
 %token<string> IDENT
 %token<int> NUM
 %token LPAREN RPAREN
-%token PLUS MINUS TIMES DIVIDES EQ LT ARROW
-%token IF THEN ELSE LET REC IN TRUE FALSE FUN ANDKWD
+%token PLUS MINUS TIMES DIVIDES EQ LT ARROW VBAR
+%token IF THEN ELSE LET REC IN TRUE FALSE FUN ANDKWD MATCH WITH
 %token DOUBLE_SEMICOLON EOF
 
 %nonassoc EQ LT
@@ -15,12 +15,15 @@
 %left TIMES DIVIDES
 
 %start<Expr.command> command
-%type<Expr.expr> expr expr2 expr3 expr4
+%type<Expr.expr> expr expr3 expr4 expr5
 %type<string Loc.loc> ident
 %type<string * Expr.expr> let_statement
 %type<(string * Expr.expr) list> let_rec_statement
 %type<string * Expr.expr> let_rec_and_assignment
 %type<string * Expr.expr> let_assignment
+
+%type<Expr.pattern> pattern
+%type<Expr.pattern> pattern_clause_tail
 %%
 
 command:
@@ -44,30 +47,34 @@ expr:
           makeloc x.lpos_start e.lpos_end (EFun (x.lval, e))
         ) binders e
       }
-  | e = expr2             { e }
-expr2:
-  | e1 = expr2; PLUS; e2 = expr2
-                          { makeloc $startpos $endpos (EAdd (e1, e2)) }
-  | e1 = expr2; MINUS; e2 = expr2
-                          { makeloc $startpos $endpos (ESub (e1, e2)) }
-  | e1 = expr2; TIMES; e2 = expr2
-                          { makeloc $startpos $endpos (EMul (e1, e2)) }
-  | e1 = expr2; DIVIDES; e2 = expr2
-                          { makeloc $startpos $endpos (EDiv (e1, e2)) }
-  | e1 = expr2; EQ; e2 = expr2
-                          { makeloc $startpos $endpos (EEq (e1, e2)) }
-  | e1 = expr2; LT; e2 = expr2
-                          { makeloc $startpos $endpos (ELt (e1, e2)) }
+  | MATCH; e = expr; WITH; ps = pattern_arrows
+      {
+        makeloc $startpos $endpos (EMatch (e, ps))
+      }
   | e = expr3             { e }
-
 expr3:
-  | el = expr4+ {
+  | e1 = expr3; PLUS; e2 = expr3
+                          { makeloc $startpos $endpos (EAdd (e1, e2)) }
+  | e1 = expr3; MINUS; e2 = expr3
+                          { makeloc $startpos $endpos (ESub (e1, e2)) }
+  | e1 = expr3; TIMES; e2 = expr3
+                          { makeloc $startpos $endpos (EMul (e1, e2)) }
+  | e1 = expr3; DIVIDES; e2 = expr3
+                          { makeloc $startpos $endpos (EDiv (e1, e2)) }
+  | e1 = expr3; EQ; e2 = expr3
+                          { makeloc $startpos $endpos (EEq (e1, e2)) }
+  | e1 = expr3; LT; e2 = expr3
+                          { makeloc $startpos $endpos (ELt (e1, e2)) }
+  | e = expr4             { e }
+
+expr4:
+  | el = expr5+ {
         List.fold_left (fun e1 e2 ->
           makeloc e1.lpos_start e2.lpos_end (EApp (e1, e2))
         ) (List.hd el) (List.tl el)
       }
 
-expr4:
+expr5:
   | n = NUM               { makeloc $startpos $endpos (EConstInt n) }
   | TRUE                  { makeloc $startpos $endpos (EConstBool true) }
   | FALSE                 { makeloc $startpos $endpos (EConstBool false) }
@@ -95,3 +102,23 @@ let_assignment:
             (fun x y -> makeloc x.lpos_start y.lpos_end (EFun (x.lval, y)))
             binders e)
       }
+
+pattern:
+  | n = NUM    { PConstInt n }
+  | TRUE       { PConstBool true }
+  | FALSE      { PConstBool false }
+  | id = IDENT { PVar id }
+  | LPAREN; p = pattern; RPAREN { p }
+
+pattern_arrows:
+  | p = pattern_arrow_head; pt = pattern_arrow_tail* { p @ (List.concat pt) }
+
+pattern_arrow_head:
+  | VBAR?; p = pattern; ps = pattern_clause_tail*; ARROW; e = expr
+      { List.map (fun p -> (p, e)) (p::ps) }
+
+pattern_arrow_tail:
+  | ps = pattern_clause_tail+; ARROW; e = expr { List.map (fun p -> (p, e)) ps }
+
+pattern_clause_tail:
+  | VBAR; p = pattern { p }

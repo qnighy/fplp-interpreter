@@ -33,6 +33,15 @@ let rec eval env e =
         | _ -> raise (Eval_error (e, "let-rec must be lambda expression."))
         ) lal in
       eval (add_rec_funs lafuns env) e1
+  | EMatch (e, ps) ->
+      let v = eval env e in
+      List.fold_right (function (p,pe) -> fun cont _ ->
+        match p with
+        | PConstInt i when v = VInt i -> eval env pe
+        | PConstBool b when v = VBool b -> eval env pe
+        | PVar x -> eval (add_var x v env) pe
+        | _ -> cont ()
+      ) ps (fun _ -> raise (Eval_error (e, "Match Failure"))) ()
   | EAdd (e0, e1) ->
       begin match eval env e0, eval env e1 with
       | VInt i0, VInt i1 -> VInt (i0 + i1)

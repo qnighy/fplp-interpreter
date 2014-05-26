@@ -3,6 +3,11 @@ open Loc
 
 type identifier = string
 
+type pattern =
+  | PConstInt of int
+  | PConstBool of bool
+  | PVar of identifier
+
 (* expression has its position data *)
 type expr = expr_t loc
 and expr_t =
@@ -13,6 +18,7 @@ and expr_t =
   | EFun of identifier * expr
   | ELet of identifier * expr * expr
   | ERLet of (identifier * expr) list * expr
+  | EMatch of expr * (pattern * expr) list
   | EAdd of expr * expr
   | ESub of expr * expr
   | EMul of expr * expr
