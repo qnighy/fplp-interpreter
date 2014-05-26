@@ -1,0 +1,8 @@
+/._bcdi
+/._d
+*.cmi
+*.cmo
+/exprLexer.ml
+/exprParser.ml
+/exprParser.mli
+/main
