@@ -6,11 +6,11 @@ let rec repl env lexbuf =
   try
     begin match ExprParser.command ExprLexer.token lexbuf with
     | CExp e ->
-        Format.printf "@[-@ =@ %a@.@]" value_formatter (Eval.eval env e);
+        Format.printf "@[-@ =@ %a@.@]" pp_value (Eval.eval env e);
         repl env lexbuf
     | CLet (v, e) ->
         let ev = Eval.eval env e in
-        Format.printf "@[%s@ =@ %a@.@]" v value_formatter ev;
+        Format.printf "@[%s@ =@ %a@.@]" v pp_value ev;
         repl (Value.add_var v ev env) lexbuf
     | CRLet lal ->
         let lafuns = List.map (function

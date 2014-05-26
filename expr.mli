@@ -7,6 +7,9 @@ type pattern =
   | PConstInt of int
   | PConstBool of bool
   | PVar of identifier
+  | PTuple of pattern list
+  | PNil
+  | PCons of pattern * pattern
 
 (* expression has its position data *)
 type expr = expr_t loc
@@ -19,6 +22,9 @@ and expr_t =
   | ELet of identifier * expr * expr
   | ERLet of (identifier * expr) list * expr
   | EMatch of expr * (pattern * expr) list
+  | ETuple of expr list
+  | ENil
+  | ECons of expr * expr
   | EAdd of expr * expr
   | ESub of expr * expr
   | EMul of expr * expr

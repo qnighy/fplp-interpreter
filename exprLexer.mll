@@ -40,8 +40,11 @@ rule token = parse
       with Not_found ->
         IDENT ident
     }
+  | ","            { COMMA }
   | "->"           { ARROW }
+  | "::"           { DOUBLE_COLON }
   | ";;"           { DOUBLE_SEMICOLON }
+  | ";"            { SEMICOLON }
   | '('            { LPAREN }
   | ')'            { RPAREN }
   | '*'            { TIMES }
@@ -50,11 +53,13 @@ rule token = parse
   | '/'            { DIVIDES }
   | '<'            { LT }
   | '='            { EQ }
+  | '['            { LSQBRACKET }
+  | ']'            { RSQBRACKET }
   | '|'            { VBAR }
   | digit+ as n    { NUM (int_of_string n) }
   | eof            { EOF }
   | _              { raise (LexingError (Loc.loc_from_lexer lexbuf))}
 
 and skip_line = parse
-  | '\n' { () }
+  | '\n' { Lexing.new_line lexbuf; () }
   | _ { skip_line lexbuf }

@@ -5,6 +5,25 @@ open Value
 
 exception Eval_error of expr * string
 
+let rec eval_pattern p v env =
+  match p, v with
+  | PConstInt i, VInt j when i = j -> Some env
+  | PConstBool b, VBool d when b = d -> Some env
+  | PVar x, _ -> Some (add_var x v env)
+  | PTuple ps, VTuple l when List.length ps = List.length l ->
+      List.fold_right (function (p,v) -> fun cont env ->
+        match eval_pattern p v env with
+        | Some env -> cont env
+        | None -> None
+      ) (List.combine ps l) (fun env -> Some env) env
+  | PNil, VNil -> Some env
+  | PCons (p0,p1), VCons (v0,v1) ->
+      begin match eval_pattern p0 v0 env with
+      | Some env -> eval_pattern p1 v1 env
+      | None -> None
+      end
+  | _ -> None
+
 let rec eval env e =
   match e.lval with
   | EConstInt i -> VInt i
@@ -36,12 +55,13 @@ let rec eval env e =
   | EMatch (e, ps) ->
       let v = eval env e in
       List.fold_right (function (p,pe) -> fun cont _ ->
-        match p with
-        | PConstInt i when v = VInt i -> eval env pe
-        | PConstBool b when v = VBool b -> eval env pe
-        | PVar x -> eval (add_var x v env) pe
-        | _ -> cont ()
+        match eval_pattern p v env with
+        | Some env -> eval env pe
+        | None -> cont ()
       ) ps (fun _ -> raise (Eval_error (e, "Match Failure"))) ()
+  | ETuple el -> VTuple (List.map (eval env) el)
+  | ENil -> VNil
+  | ECons (h, t) -> VCons (eval env h, eval env t)
   | EAdd (e0, e1) ->
       begin match eval env e0, eval env e1 with
       | VInt i0, VInt i1 -> VInt (i0 + i1)

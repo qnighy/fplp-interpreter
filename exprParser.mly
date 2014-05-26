@@ -6,23 +6,26 @@
 %token<string> IDENT
 %token<int> NUM
 %token LPAREN RPAREN
-%token PLUS MINUS TIMES DIVIDES EQ LT ARROW VBAR
+%token LSQBRACKET RSQBRACKET
+%token PLUS MINUS TIMES DIVIDES EQ LT ARROW VBAR DOUBLE_COLON COMMA SEMICOLON
 %token IF THEN ELSE LET REC IN TRUE FALSE FUN ANDKWD MATCH WITH
 %token DOUBLE_SEMICOLON EOF
 
 %nonassoc EQ LT
+%right DOUBLE_COLON
 %left PLUS MINUS
 %left TIMES DIVIDES
 
 %start<Expr.command> command
 %type<Expr.expr> expr expr3 expr4 expr5
+/* %type<Expr.expr list> expr2_tuple */
 %type<string Loc.loc> ident
 %type<string * Expr.expr> let_statement
 %type<(string * Expr.expr) list> let_rec_statement
 %type<string * Expr.expr> let_rec_and_assignment
 %type<string * Expr.expr> let_assignment
 
-%type<Expr.pattern> pattern
+%type<Expr.pattern> pattern pattern2 pattern3
 %type<Expr.pattern> pattern_clause_tail
 %%
 
@@ -51,7 +54,9 @@ expr:
       {
         makeloc $startpos $endpos (EMatch (e, ps))
       }
-  | e = expr3             { e }
+  | e = expr3 { e }
+  | e = expr3; COMMA; el = separated_nonempty_list(COMMA, expr3)
+      { makeloc $startpos $endpos (ETuple (e :: el)) }
 expr3:
   | e1 = expr3; PLUS; e2 = expr3
                           { makeloc $startpos $endpos (EAdd (e1, e2)) }
@@ -65,6 +70,8 @@ expr3:
                           { makeloc $startpos $endpos (EEq (e1, e2)) }
   | e1 = expr3; LT; e2 = expr3
                           { makeloc $startpos $endpos (ELt (e1, e2)) }
+  | e1 = expr3; DOUBLE_COLON; e2 = expr3
+                          { makeloc $startpos $endpos (ECons (e1, e2)) }
   | e = expr4             { e }
 
 expr4:
@@ -75,11 +82,18 @@ expr4:
       }
 
 expr5:
-  | n = NUM               { makeloc $startpos $endpos (EConstInt n) }
-  | TRUE                  { makeloc $startpos $endpos (EConstBool true) }
-  | FALSE                 { makeloc $startpos $endpos (EConstBool false) }
-  | id = IDENT            { makeloc $startpos $endpos (EVar id) }
+  | n = NUM    { makeloc $startpos $endpos (EConstInt n) }
+  | TRUE { makeloc $startpos $endpos (EConstBool true) }
+  | FALSE { makeloc $startpos $endpos (EConstBool false) }
+  | id = IDENT { makeloc $startpos $endpos (EVar id) }
   | LPAREN; e = expr; RPAREN { e }
+  | LPAREN; RPAREN { makeloc $startpos $endpos (ETuple []) }
+  | LSQBRACKET; l = separated_list(SEMICOLON, expr); RSQBRACKET
+      { makeloc $startpos $endpos
+        (List.fold_right
+          (fun h t -> ECons (h, makeloc h.lpos_start $endpos t))
+          l ENil)
+      }
 
 ident:
   | x = IDENT { makeloc $startpos $endpos x }
@@ -104,11 +118,26 @@ let_assignment:
       }
 
 pattern:
+  | p = pattern2 { p }
+  | p = pattern2; COMMA; pl = separated_nonempty_list(COMMA, pattern2)
+      { PTuple (p :: pl) }
+pattern2:
+  | p1 = pattern2; DOUBLE_COLON; p2 = pattern2
+                          { PCons (p1, p2) }
+  | p = pattern3 { p }
+pattern3:
   | n = NUM    { PConstInt n }
   | TRUE       { PConstBool true }
   | FALSE      { PConstBool false }
   | id = IDENT { PVar id }
   | LPAREN; p = pattern; RPAREN { p }
+  | LPAREN; RPAREN { PTuple [] }
+  | LSQBRACKET; l = separated_list(SEMICOLON, pattern); RSQBRACKET
+      {
+        List.fold_right
+          (fun h t -> PCons (h, t))
+          l PNil
+      }
 
 pattern_arrows:
   | p = pattern_arrow_head; pt = pattern_arrow_tail* { p @ (List.concat pt) }
