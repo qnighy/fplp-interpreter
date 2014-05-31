@@ -38,3 +38,6 @@ type command =
   | CLet of identifier * expr
   | CRLet of (identifier * expr) list
   | CEnd
+
+val pp_pattern_lvl : int -> Format.formatter -> pattern -> unit
+val pp_pattern : Format.formatter -> pattern -> unit

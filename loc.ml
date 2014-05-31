@@ -20,6 +20,11 @@ let loc_from_parser v = {
 }
 
 let makeloc s e v = { lval = v; lpos_start = s; lpos_end = e }
+let inherit_loc e v = {
+  lval = v;
+  lpos_start = e.lpos_start;
+  lpos_end = e.lpos_end
+}
 
 let pos_formatter pf pos =
   if pos = dummy_pos then
