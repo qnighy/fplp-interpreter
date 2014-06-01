@@ -66,3 +66,11 @@ val infer_type_internal :
 
 val infer_type :
   local_type_env -> expr -> typed_expr
+
+val infer_type_let :
+  local_type_env -> identifier -> expr -> local_type_env * typed_expr
+
+val infer_type_rlet :
+  local_type_env ->
+  (identifier * expr) list ->
+  local_type_env * typed_expr list

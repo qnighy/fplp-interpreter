@@ -403,9 +403,10 @@ let rec unify_type_of_term env trm typ =
           pp_ty (snd trm.lval)
           pp_ty typ))
 
-let is_abstractable env exnum =
+let is_abstractable env start_index end_index exnum =
   not (ExistentialMap.mem exnum env.existential_assign) &&
-  ExistentialMap.for_all (fun _ t0 ->
+  ExistentialMap.for_all (fun exnum0 t0 ->
+    (start_index <= exnum0 && exnum0 < end_index) ||
     not (existential_occurence exnum t0)
   ) env.existential_assign
 
@@ -503,7 +504,7 @@ let collect_existentials env start_index end_index el =
   let exs = ExistentialSet.empty in
   let exs = List.fold_left (fun exs e ->
     collect_existentials_rec env start_index end_index e exs) exs el in
-  ExistentialSet.filter (is_abstractable env) exs
+  ExistentialSet.filter (is_abstractable env start_index end_index) exs
 
 let rec abstract_existential_of_ty exnum idx t =
   match t with
@@ -699,6 +700,38 @@ let rec instantiate_repeat env depth e =
     let e = instantiate_var_of_typed_expr 0 ex0 e in
     (env, e)
 
+let rec add_type_var_for_pattern p t env l_env =
+  match p with
+  | PConstInt _ ->
+      let env = unify_type env t TInt in
+      (env, l_env)
+  | PConstBool _ ->
+      let env = unify_type env t TBool in
+      (env, l_env)
+  | PVar x ->
+      let l_env = add_type_var x 0 t l_env in
+      (env, l_env)
+  | PTuple pl ->
+      let (env,ex0s_rev) = List.fold_left (function (env, ex0s) -> fun _ ->
+        let (env,ex0) = new_existential env in
+        (env, ex0 :: ex0s)
+      ) (env, []) pl in
+      let ex0s = List.rev ex0s_rev in
+      let env = unify_type env t (TTuple ex0s) in
+      List.fold_left (function (env, l_env) -> function (p0, ex0) ->
+        add_type_var_for_pattern p0 ex0 env l_env
+      ) (env, l_env) (List.combine pl ex0s)
+  | PNil ->
+      let (env,ex0) = new_existential env in
+      let env = unify_type env t (TList ex0) in
+      (env, l_env)
+  | PCons (p0, p1) ->
+      let (env,ex0) = new_existential env in
+      let env = unify_type env t (TList ex0) in
+      let (env, l_env) = add_type_var_for_pattern p0 ex0 env l_env in
+      let (env, l_env) = add_type_var_for_pattern p1 t env l_env in
+      (env, l_env)
+
 let rec infer_type_internal env l_env e =
   match e.lval with
   | EConstInt i -> (env, inherit_loc e (TEConstInt i, TInt))
@@ -767,9 +800,30 @@ let rec infer_type_internal env l_env e =
       let (env,e1t) = infer_type_internal env l_env1 e1 in
       (env, inherit_loc e (TERLet (depth, lafuns, e1t),
                            snd e1t.lval))
-  (* | ELet of identifier * expr * expr
-  | ERLet of (identifier * expr) list * expr
-  | EMatch of expr * (pattern * expr) list *)
+  | EMatch (e0, ps) ->
+      let (env,e0t) = infer_type_internal env l_env e0 in
+      let (env,ex1) = new_existential env in
+      let (env,pts_rev) = List.fold_left (function (env,pts_rev) ->
+        function (p, pe) ->
+        let (env, l_env0) =
+          begin try
+            add_type_var_for_pattern p (snd e0t.lval) env l_env
+          with Unification_error ->
+            let e0t = subst_type_typed_expr env e0t in
+            raise (type_error e
+              (Format.asprintf
+                ("@[The@ expression@ @[%a@]@ has@ type@ %a@.@]" ^^
+                 "@[But some match clause is inconsistent with that type@.@]")
+                pp_typed_expr e0t
+                pp_ty (snd e0t.lval)))
+          end
+        in
+        let (env,pet) = infer_type_internal env l_env0 pe in
+        let env = unify_type_of_term env pet ex1 in
+        (env, (p, pet) :: pts_rev)
+      ) (env,[]) ps in
+      let pts = List.rev pts_rev in
+      (env, inherit_loc e (TEMatch (e0t, pts), ex1))
   | ETuple el ->
       let (env, rev_elt) =
         List.fold_left (function (env,rev_elt) -> fun e0 ->
@@ -837,3 +891,46 @@ let infer_type l_env e =
   let (env, te) = infer_type_internal env l_env e in
   let te = subst_type_typed_expr env te in
   te
+
+let infer_type_let l_env x e0 =
+  let env = empty_type_env in
+  let start_index = env.existential_index in
+  let (env,e0t) = infer_type_internal env l_env e0 in
+  let end_index = env.existential_index in
+  let e0t = subst_type_typed_expr env e0t in
+  let (e0tas,depth) =
+    abstract_existentials env start_index end_index [e0t] in
+  let e0ta = List.hd e0tas in
+  let l_env0 = add_type_var x depth (snd e0ta.lval) l_env in
+  (l_env0, e0ta)
+
+let infer_type_rlet l_env lafuns =
+  let env = empty_type_env in
+  let start_index = env.existential_index in
+  let (env,ex0s_rev) = List.fold_left (function (env, ex0s) -> fun _ ->
+    let (env,ex0) = new_existential env in
+    (env, ex0 :: ex0s)
+  ) (env, []) lafuns in
+  let ex0s = List.rev ex0s_rev in
+  let l_env0 = List.fold_left (fun l_env0 ->
+    function ((x_rlet, e0), ex0) ->
+    add_type_var x_rlet 0 ex0 l_env0
+  ) l_env (List.combine lafuns ex0s) in
+  let (env,e0ts_rev) = List.fold_left (function (env, e0ts_rev) ->
+    function (x_rlet, e0) ->
+    let (env,e0t) = infer_type_internal env l_env0 e0 in
+    (env, e0t :: e0ts_rev)
+  ) (env, []) lafuns in
+  let e0ts = List.rev e0ts_rev in
+  let end_index = env.existential_index in
+  let e0ts = List.map (subst_type_typed_expr env) e0ts in
+  let (e0tas,depth) =
+    abstract_existentials env start_index end_index e0ts in
+  let lafuns = List.map (function ((x_rlet, e0), e0ta) ->
+    (snd e0ta.lval, x_rlet, e0ta)
+  ) (List.combine lafuns e0tas) in
+  let l_env1 = List.fold_left (fun l_env1 ->
+    function (t_rlet, x_rlet, e0ta) ->
+    add_type_var x_rlet depth t_rlet l_env1
+  ) l_env lafuns in
+  (l_env1, List.map (function (t_rlet, x_rlet, e0ta) -> e0ta) lafuns)
