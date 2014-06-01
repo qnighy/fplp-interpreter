@@ -16,7 +16,6 @@ type ty =
   | TTuple of ty list
   | TList of ty
   | TVar of int (* de brujin *)
-  | TForall of ty
   | TExistential of existential
 
 type type_env = {
@@ -38,8 +37,8 @@ and typed_expr_t =
   | TEVar of identifier
   | TEApp of typed_expr * typed_expr
   | TEFun of ty * identifier * typed_expr
-  | TELet of ty * identifier * typed_expr * typed_expr
-  | TERLet of (ty * identifier * typed_expr) list * typed_expr
+  | TELet of int * ty * identifier * typed_expr * typed_expr
+  | TERLet of int * (ty * identifier * typed_expr) list * typed_expr
   | TEMatch of typed_expr * (pattern * typed_expr) list
   | TETuple of typed_expr list
   | TENil

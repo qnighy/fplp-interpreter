@@ -17,6 +17,7 @@ module Existential = struct
 end
 
 module ExistentialMap = Map.Make(Existential)
+module ExistentialSet = Set.Make(Existential)
 
 type ty =
   | TInt
@@ -25,7 +26,6 @@ type ty =
   | TTuple of ty list
   | TList of ty
   | TVar of int (* de brujin *)
-  | TForall of ty
   | TExistential of existential
 
 type type_env = {
@@ -57,8 +57,8 @@ and typed_expr_t =
   | TEVar of identifier
   | TEApp of typed_expr * typed_expr
   | TEFun of ty * identifier * typed_expr
-  | TELet of ty * identifier * typed_expr * typed_expr
-  | TERLet of (ty * identifier * typed_expr) list * typed_expr
+  | TELet of int * ty * identifier * typed_expr * typed_expr
+  | TERLet of int * (ty * identifier * typed_expr) list * typed_expr
   | TEMatch of typed_expr * (pattern * typed_expr) list
   | TETuple of typed_expr list
   | TENil
@@ -78,7 +78,6 @@ let pp_ty_getlevel = function
   | TTuple _ -> 0
   | TList _ -> 1
   | TVar _ -> 0
-  | TForall _ -> 3
   | TExistential _ -> 0
 
 let rec pp_ty_lvl lvl pf t =
@@ -105,7 +104,6 @@ let rec pp_ty_lvl lvl pf t =
       Format.fprintf pf ")@]"
   | TList t -> Format.fprintf pf "@[%a@ list@]" (pp_ty_lvl 1) t
   | TVar i -> Format.fprintf pf "@[VAR%d@]" i
-  | TForall t -> Format.fprintf pf "@[FORALL@ %a@]" (pp_ty_lvl 3) t
   | TExistential ex -> Format.fprintf pf "@[?%d@]" ex
   end;
   if pp_ty_getlevel t > lvl then
@@ -158,13 +156,13 @@ let rec pp_typed_expr_lvl lvl pf e =
         x_abs
         pp_ty t_abs
         (pp_typed_expr_lvl 10) e
-  | TELet (t_let, x_let, e0, e1) ->
+  | TELet (depth, t_let, x_let, e0, e1) ->
       Format.fprintf pf "@[(let@ %s@ :@ %a@ :=@ %a@ in@ %a)@]"
         x_let
         pp_ty t_let
         (pp_typed_expr_lvl 10) e0
         (pp_typed_expr_lvl 10) e1
-  | TERLet (lafuns, e1) ->
+  | TERLet (depth, lafuns, e1) ->
       Format.fprintf pf "@[";
       let flag = ref true in
       List.iter (function (t_rlet, x_rlet, e0) ->
@@ -266,7 +264,6 @@ let rec subst_type_ty env t =
   | TTuple tl -> TTuple (List.map (subst_type_ty env) tl)
   | TList t -> TList (subst_type_ty env t)
   | TVar _ -> t
-  | TForall t -> TForall (subst_type_ty env t)
   | TExistential ex ->
       begin try
         subst_type_ty env
@@ -287,13 +284,15 @@ let rec subst_type_typed_expr env te =
   | TEFun (t_abs, x_abs, e) ->
       TEFun (subst_type_ty env t_abs,
              x_abs, subst_type_typed_expr env e)
-  | TELet (t_let, x_let, e0, e1) ->
-      TELet (subst_type_ty env t_let,
+  | TELet (depth, t_let, x_let, e0, e1) ->
+      TELet (depth,
+             subst_type_ty env t_let,
              x_let,
              subst_type_typed_expr env e0,
              subst_type_typed_expr env e1)
-  | TERLet (lafuns, e1) ->
+  | TERLet (depth, lafuns, e1) ->
       TERLet (
+        depth,
         List.map (function (t_rlet, x_rlet, e0) ->
           (subst_type_ty env t_rlet,
            x_rlet,
@@ -345,7 +344,6 @@ let rec existential_occurence ex t =
       List.for_all (existential_occurence ex) tl
   | TList t -> existential_occurence ex t
   | TVar _ -> false
-  | TForall t -> existential_occurence ex t
   | TExistential ex0 -> ex = ex0
 
 let rec unify_type env t0 t1 =
@@ -405,6 +403,194 @@ let rec unify_type_of_term env trm typ =
           pp_ty (snd trm.lval)
           pp_ty typ))
 
+let is_abstractable env exnum =
+  not (ExistentialMap.mem exnum env.existential_assign) &&
+  ExistentialMap.for_all (fun _ t0 ->
+    not (existential_occurence exnum t0)
+  ) env.existential_assign
+
+let rec collect_existentials_ty env start_index end_index t exs =
+  match t with
+  | TInt -> exs
+  | TBool -> exs
+  | TArrow (t0, t1) ->
+      let exs = collect_existentials_ty env start_index end_index t0 exs in
+      let exs = collect_existentials_ty env start_index end_index t1 exs in
+      exs
+  | TTuple tl ->
+      List.fold_left (fun exs t0 ->
+        collect_existentials_ty env start_index end_index t0 exs
+      ) exs tl
+  | TList t0 ->
+      collect_existentials_ty env start_index end_index t0 exs
+  | TVar _ -> exs
+  | TExistential exnum ->
+      if start_index <= exnum && exnum < end_index then
+        ExistentialSet.add exnum exs
+      else
+        exs
+
+let rec collect_existentials_rec env start_index end_index e exs =
+  let exs =
+    collect_existentials_ty env start_index end_index (snd e.lval) exs in
+  match fst e.lval with
+  | TEConstInt _ -> exs
+  | TEConstBool _ -> exs
+  | TEVar _ -> exs
+  | TEApp (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEFun (t_fun, x_fun, e0) ->
+      let exs = collect_existentials_ty env start_index end_index t_fun exs in
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      exs
+  | TELet (depth, t_let, x_let, e0, e1) ->
+      let exs = collect_existentials_ty env start_index end_index t_let exs in
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TERLet (depth, lafuns, e1) ->
+      let exs = List.fold_left (fun exs -> function (t_rlet, x_rlet, e0) ->
+        collect_existentials_rec env start_index end_index e0 exs
+      ) exs lafuns in
+      collect_existentials_rec env start_index end_index e1 exs
+  | TEMatch (e0, ps) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      List.fold_left (fun exs -> function (_,pe) ->
+        collect_existentials_rec env start_index end_index pe exs
+      ) exs ps
+  | TETuple el ->
+      List.fold_left (fun exs e0 ->
+        collect_existentials_rec env start_index end_index e0 exs
+      ) exs el
+  | TENil -> exs
+  | TECons (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEAdd (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TESub (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEMul (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEDiv (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEEq (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TELt (e0, e1) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      exs
+  | TEIf (e0, e1, e2) ->
+      let exs = collect_existentials_rec env start_index end_index e0 exs in
+      let exs = collect_existentials_rec env start_index end_index e1 exs in
+      let exs = collect_existentials_rec env start_index end_index e2 exs in
+      exs
+
+let collect_existentials env start_index end_index e =
+  let exs = ExistentialSet.empty in
+  let exs = collect_existentials_rec env start_index end_index e exs in
+  ExistentialSet.filter (is_abstractable env) exs
+
+let rec abstract_existential_of_ty exnum idx t =
+  match t with
+  | TInt -> t
+  | TBool -> t
+  | TArrow (t0, t1) ->
+      TArrow (abstract_existential_of_ty exnum idx t0,
+              abstract_existential_of_ty exnum idx t1)
+  | TTuple tl ->
+      TTuple (List.map (abstract_existential_of_ty exnum idx) tl)
+  | TList t0 ->
+      TList (abstract_existential_of_ty exnum idx t0)
+  | TVar x when x < idx -> t
+  | TVar x -> TVar (x + 1)
+  | TExistential exnum0 when exnum = exnum0 -> TVar idx
+  | TExistential _ -> t
+
+let rec abstract_existential_of_typed_expr exnum idx e =
+  let eterm = fst e.lval in
+  let eterm = begin match eterm with
+  | TEConstInt _ -> eterm
+  | TEConstBool _ -> eterm
+  | TEVar _ -> eterm
+  | TEApp (e0, e1) ->
+      TEApp (abstract_existential_of_typed_expr exnum idx e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TEFun (t_fun, x_fun, e0) ->
+      TEFun (abstract_existential_of_ty exnum idx t_fun,
+             x_fun,
+             abstract_existential_of_typed_expr exnum idx e0)
+  | TELet (depth, t_let, x_let, e0, e1) ->
+      TELet (depth,
+             abstract_existential_of_ty exnum (idx + depth) t_let,
+             x_let,
+             abstract_existential_of_typed_expr exnum (idx + depth) e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TERLet (depth, lafuns, e1) ->
+      let lafuns = List.map (function (t_rlet, x_rlet, e0) ->
+        (abstract_existential_of_ty exnum (idx + depth) t_rlet,
+         x_rlet,
+         abstract_existential_of_typed_expr exnum (idx + depth) e0)
+      ) lafuns in
+      TERLet (depth, lafuns,
+              abstract_existential_of_typed_expr exnum idx e1)
+  | TEMatch (e0, ps) ->
+      let ps = List.map (function (p,pe) ->
+        (p, abstract_existential_of_typed_expr exnum idx pe)
+      ) ps in
+      TEMatch (abstract_existential_of_typed_expr exnum idx e0, ps)
+  | TETuple el ->
+      let el = List.map (abstract_existential_of_typed_expr exnum idx) el in
+      TETuple el
+  | TENil -> TENil
+  | TECons (e0, e1) ->
+      TECons (abstract_existential_of_typed_expr exnum idx e0,
+              abstract_existential_of_typed_expr exnum idx e1)
+  | TEAdd (e0, e1) ->
+      TEAdd (abstract_existential_of_typed_expr exnum idx e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TESub (e0, e1) ->
+      TESub (abstract_existential_of_typed_expr exnum idx e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TEMul (e0, e1) ->
+      TEMul (abstract_existential_of_typed_expr exnum idx e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TEDiv (e0, e1) ->
+      TEDiv (abstract_existential_of_typed_expr exnum idx e0,
+             abstract_existential_of_typed_expr exnum idx e1)
+  | TEEq (e0, e1) ->
+      TEEq (abstract_existential_of_typed_expr exnum idx e0,
+            abstract_existential_of_typed_expr exnum idx e1)
+  | TELt (e0, e1) ->
+      TELt (abstract_existential_of_typed_expr exnum idx e0,
+            abstract_existential_of_typed_expr exnum idx e1)
+  | TEIf (e0, e1, e2) ->
+      TEIf (abstract_existential_of_typed_expr exnum idx e0,
+            abstract_existential_of_typed_expr exnum idx e1,
+            abstract_existential_of_typed_expr exnum idx e2)
+  end in
+  inherit_loc e (eterm, abstract_existential_of_ty exnum idx (snd e.lval))
+
+let rec abstract_existentials env start_index end_index e =
+  let exs = collect_existentials env start_index end_index e in
+  let e = ExistentialSet.fold (fun exnum e ->
+    abstract_existential_of_typed_expr exnum 0 e
+  ) exs e in
+  (e, ExistentialSet.cardinal exs)
+
 let rec infer_type_internal env l_env e =
   match e.lval with
   | EConstInt i -> (env, inherit_loc e (TEConstInt i, TInt))
@@ -429,6 +615,15 @@ let rec infer_type_internal env l_env e =
       let l_env0 = add_type_var x ex0 l_env in
       let (env,e0t) = infer_type_internal env l_env0 e0 in
       (env, inherit_loc e (TEFun (ex0, x, e0t), TArrow (ex0, snd e0t.lval)))
+  | ELet (x, e0, e1) ->
+      let start_index = env.existential_index in
+      let (env,e0t) = infer_type_internal env l_env e0 in
+      let end_index = env.existential_index in
+      let (e0ta,depth) = abstract_existentials env start_index end_index e0t in
+      let l_env0 = add_type_var x (snd e0ta.lval) l_env in
+      let (env,e1t) = infer_type_internal env l_env0 e1 in
+      (env, inherit_loc e (TELet (depth, snd e0ta.lval, x, e0ta, e1t),
+                           snd e1t.lval))
   (* | ELet of identifier * expr * expr
   | ERLet of (identifier * expr) list * expr
   | EMatch of expr * (pattern * expr) list *)
