@@ -34,7 +34,7 @@ type type_env = {
 }
 
 type local_type_env = {
-  variables: ty IdentifierMap.t
+  variables: (int * ty) IdentifierMap.t
 }
 
 let empty_type_env = {
@@ -46,8 +46,8 @@ let empty_local_type_env = {
   variables = IdentifierMap.empty
 }
 
-let add_type_var v t env = {
-  variables = IdentifierMap.add v t env.variables
+let add_type_var v depth t env = {
+  variables = IdentifierMap.add v (depth, t) env.variables
 }
 
 type typed_expr = (typed_expr_t * ty) loc
@@ -591,13 +591,120 @@ let rec abstract_existentials env start_index end_index e =
   ) exs e in
   (e, ExistentialSet.cardinal exs)
 
+let rec shift_ty idx shift_size t =
+  match t with
+  | TInt -> t
+  | TBool -> t
+  | TArrow (t0, t1) ->
+      TArrow (shift_ty idx shift_size t0,
+              shift_ty idx shift_size t1)
+  | TTuple tl ->
+      TTuple (List.map (shift_ty idx shift_size) tl)
+  | TList t0 -> TList (shift_ty idx shift_size t0)
+  | TVar x when x < idx -> t
+  | TVar x -> TVar (x + shift_size)
+  | TExistential _ -> t
+
+let rec instantiate_var_of_ty idx t_inst t =
+  match t with
+  | TInt -> t
+  | TBool -> t
+  | TArrow (t0, t1) ->
+      TArrow (instantiate_var_of_ty idx t_inst t0,
+              instantiate_var_of_ty idx t_inst t1)
+  | TTuple tl ->
+      TTuple (List.map (instantiate_var_of_ty idx t_inst) tl)
+  | TList t0 -> TList (instantiate_var_of_ty idx t_inst t0)
+  | TVar x when x < idx -> t
+  | TVar x when x = idx -> shift_ty 0 idx t_inst
+  | TVar x -> TVar (x + 1)
+  | TExistential _ -> t
+
+let rec instantiate_var_of_typed_expr idx t_inst e =
+  let eterm = fst e.lval in
+  let eterm = begin match eterm with
+  | TEConstInt _ -> eterm
+  | TEConstBool _ -> eterm
+  | TEVar _ -> eterm
+  | TEApp (e0, e1) ->
+      TEApp (instantiate_var_of_typed_expr idx t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TEFun (t_fun, x_fun, e0) ->
+      TEFun (instantiate_var_of_ty idx t_inst t_fun,
+             x_fun,
+             instantiate_var_of_typed_expr idx t_inst e0)
+  | TELet (depth, t_let, x_let, e0, e1) ->
+      TELet (depth,
+             instantiate_var_of_ty idx t_inst t_let,
+             x_let,
+             instantiate_var_of_typed_expr (idx + depth) t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TERLet (depth, lafuns, e1) ->
+      let lafuns = List.map (function (t_rlet, x_rlet, e0) ->
+        (instantiate_var_of_ty idx t_inst t_rlet,
+         x_rlet,
+         instantiate_var_of_typed_expr (idx + depth) t_inst e0)
+      ) lafuns in
+      TERLet (depth, lafuns,
+              instantiate_var_of_typed_expr idx t_inst e1)
+  | TEMatch (e0, ps) ->
+      let ps = List.map (function (p,pe) ->
+        (p, instantiate_var_of_typed_expr idx t_inst pe)) ps in
+      TEMatch (instantiate_var_of_typed_expr idx t_inst e0, ps)
+  | TETuple el ->
+      let el = List.map (instantiate_var_of_typed_expr idx t_inst) el in
+      TETuple el
+  | TENil -> TENil
+  | TECons (e0, e1) ->
+      TECons (instantiate_var_of_typed_expr idx t_inst e0,
+              instantiate_var_of_typed_expr idx t_inst e1)
+  | TEAdd (e0, e1) ->
+      TEAdd (instantiate_var_of_typed_expr idx t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TESub (e0, e1) ->
+      TESub (instantiate_var_of_typed_expr idx t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TEMul (e0, e1) ->
+      TEMul (instantiate_var_of_typed_expr idx t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TEDiv (e0, e1) ->
+      TEDiv (instantiate_var_of_typed_expr idx t_inst e0,
+             instantiate_var_of_typed_expr idx t_inst e1)
+  | TEEq (e0, e1) ->
+      TEEq (instantiate_var_of_typed_expr idx t_inst e0,
+            instantiate_var_of_typed_expr idx t_inst e1)
+  | TELt (e0, e1) ->
+      TELt (instantiate_var_of_typed_expr idx t_inst e0,
+            instantiate_var_of_typed_expr idx t_inst e1)
+  | TEIf (e0, e1, e2) ->
+      TEIf (instantiate_var_of_typed_expr idx t_inst e0,
+            instantiate_var_of_typed_expr idx t_inst e1,
+            instantiate_var_of_typed_expr idx t_inst e2)
+  end in
+  inherit_loc e (eterm, instantiate_var_of_ty idx t_inst (snd e.lval))
+
+let rec instantiate_repeat_ty env depth t =
+  if depth <= 0 then (env, t)
+  else
+    let (env,ex0) = new_existential env in
+    let t = instantiate_var_of_ty 0 ex0 t in
+    (env, t)
+
+let rec instantiate_repeat env depth e =
+  if depth <= 0 then (env, e)
+  else
+    let (env,ex0) = new_existential env in
+    let e = instantiate_var_of_typed_expr 0 ex0 e in
+    (env, e)
+
 let rec infer_type_internal env l_env e =
   match e.lval with
   | EConstInt i -> (env, inherit_loc e (TEConstInt i, TInt))
   | EConstBool b -> (env, inherit_loc e (TEConstBool b, TBool))
   | EVar v ->
       begin try
-        let t = IdentifierMap.find v l_env.variables in
+        let (depth, t) = IdentifierMap.find v l_env.variables in
+        let (env, t) = instantiate_repeat_ty env depth t in
         (env, inherit_loc e (TEVar v, t))
       with Not_found ->
         raise (type_error e ("Variable " ^ v ^ " not found"))
@@ -612,15 +719,16 @@ let rec infer_type_internal env l_env e =
       (env, inherit_loc e (TEApp (e0t, e1t), ex1))
   | EFun (x, e0) ->
       let (env,ex0) = new_existential env in
-      let l_env0 = add_type_var x ex0 l_env in
+      let l_env0 = add_type_var x 0 ex0 l_env in
       let (env,e0t) = infer_type_internal env l_env0 e0 in
       (env, inherit_loc e (TEFun (ex0, x, e0t), TArrow (ex0, snd e0t.lval)))
   | ELet (x, e0, e1) ->
       let start_index = env.existential_index in
       let (env,e0t) = infer_type_internal env l_env e0 in
       let end_index = env.existential_index in
+      let e0t = subst_type_typed_expr env e0t in
       let (e0ta,depth) = abstract_existentials env start_index end_index e0t in
-      let l_env0 = add_type_var x (snd e0ta.lval) l_env in
+      let l_env0 = add_type_var x depth (snd e0ta.lval) l_env in
       let (env,e1t) = infer_type_internal env l_env0 e1 in
       (env, inherit_loc e (TELet (depth, snd e0ta.lval, x, e0ta, e1t),
                            snd e1t.lval))

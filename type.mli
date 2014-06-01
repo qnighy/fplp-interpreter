@@ -24,11 +24,11 @@ type type_env = {
 }
 
 type local_type_env = {
-  variables: ty IdentifierMap.t
+  variables: (int * ty) IdentifierMap.t
 }
 val empty_local_type_env : local_type_env
 
-val add_type_var : identifier -> ty -> local_type_env -> local_type_env
+val add_type_var : identifier -> int -> ty -> local_type_env -> local_type_env
 
 type typed_expr = (typed_expr_t * ty) loc
 and typed_expr_t =
