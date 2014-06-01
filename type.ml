@@ -170,7 +170,7 @@ let rec pp_typed_expr_lvl lvl pf e =
           Format.fprintf pf "@[let@ rec@ "
         else
           Format.fprintf pf "@[and@ ";
-        Format.fprintf pf "%s@ :@ %a@ :=@ %a@)@]@ "
+        Format.fprintf pf "%s@ :@ %a@ :=@ %a)@]@ "
           x_rlet
           pp_ty t_rlet
           (pp_typed_expr_lvl 10) e0
@@ -499,9 +499,10 @@ let rec collect_existentials_rec env start_index end_index e exs =
       let exs = collect_existentials_rec env start_index end_index e2 exs in
       exs
 
-let collect_existentials env start_index end_index e =
+let collect_existentials env start_index end_index el =
   let exs = ExistentialSet.empty in
-  let exs = collect_existentials_rec env start_index end_index e exs in
+  let exs = List.fold_left (fun exs e ->
+    collect_existentials_rec env start_index end_index e exs) exs el in
   ExistentialSet.filter (is_abstractable env) exs
 
 let rec abstract_existential_of_ty exnum idx t =
@@ -584,12 +585,13 @@ let rec abstract_existential_of_typed_expr exnum idx e =
   end in
   inherit_loc e (eterm, abstract_existential_of_ty exnum idx (snd e.lval))
 
-let rec abstract_existentials env start_index end_index e =
-  let exs = collect_existentials env start_index end_index e in
-  let e = ExistentialSet.fold (fun exnum e ->
-    abstract_existential_of_typed_expr exnum 0 e
-  ) exs e in
-  (e, ExistentialSet.cardinal exs)
+let rec abstract_existentials env start_index end_index el =
+  let exs = collect_existentials env start_index end_index el in
+  let el = List.map (fun e ->
+    ExistentialSet.fold (fun exnum e ->
+      abstract_existential_of_typed_expr exnum 0 e
+    ) exs e) el in
+  (el, ExistentialSet.cardinal exs)
 
 let rec shift_ty idx shift_size t =
   match t with
@@ -727,10 +729,43 @@ let rec infer_type_internal env l_env e =
       let (env,e0t) = infer_type_internal env l_env e0 in
       let end_index = env.existential_index in
       let e0t = subst_type_typed_expr env e0t in
-      let (e0ta,depth) = abstract_existentials env start_index end_index e0t in
+      let (e0tas,depth) =
+        abstract_existentials env start_index end_index [e0t] in
+      let e0ta = List.hd e0tas in
       let l_env0 = add_type_var x depth (snd e0ta.lval) l_env in
       let (env,e1t) = infer_type_internal env l_env0 e1 in
       (env, inherit_loc e (TELet (depth, snd e0ta.lval, x, e0ta, e1t),
+                           snd e1t.lval))
+  | ERLet (lafuns, e1) ->
+      let start_index = env.existential_index in
+      let (env,ex0s_rev) = List.fold_left (function (env, ex0s) -> fun _ ->
+        let (env,ex0) = new_existential env in
+        (env, ex0 :: ex0s)
+      ) (env, []) lafuns in
+      let ex0s = List.rev ex0s_rev in
+      let l_env0 = List.fold_left (fun l_env0 ->
+        function ((x_rlet, e0), ex0) ->
+        add_type_var x_rlet 0 ex0 l_env0
+      ) l_env (List.combine lafuns ex0s) in
+      let (env,e0ts_rev) = List.fold_left (function (env, e0ts_rev) ->
+        function (x_rlet, e0) ->
+        let (env,e0t) = infer_type_internal env l_env0 e0 in
+        (env, e0t :: e0ts_rev)
+      ) (env, []) lafuns in
+      let e0ts = List.rev e0ts_rev in
+      let end_index = env.existential_index in
+      let e0ts = List.map (subst_type_typed_expr env) e0ts in
+      let (e0tas,depth) =
+        abstract_existentials env start_index end_index e0ts in
+      let lafuns = List.map (function ((x_rlet, e0), e0ta) ->
+        (snd e0ta.lval, x_rlet, e0ta)
+      ) (List.combine lafuns e0tas) in
+      let l_env1 = List.fold_left (fun l_env1 ->
+        function (t_rlet, x_rlet, e0ta) ->
+        add_type_var x_rlet depth t_rlet l_env1
+      ) l_env lafuns in
+      let (env,e1t) = infer_type_internal env l_env1 e1 in
+      (env, inherit_loc e (TERLet (depth, lafuns, e1t),
                            snd e1t.lval))
   (* | ELet of identifier * expr * expr
   | ERLet of (identifier * expr) list * expr
