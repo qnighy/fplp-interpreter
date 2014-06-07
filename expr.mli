@@ -1,7 +1,6 @@
 (* expr.mli : value and expression *)
+open Misc
 open Loc
-
-type identifier = string
 
 type pattern =
   | PConstInt of int

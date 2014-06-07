@@ -1,4 +1,5 @@
 (* type.ml : type *)
+open Misc
 open Loc
 open Expr
 open Value

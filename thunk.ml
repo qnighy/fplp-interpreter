@@ -1,4 +1,4 @@
-(* value.ml : value and evaluation environment *)
+(* thunk.ml : evaluation status for cbn *)
 open Misc
 open Expr
 
@@ -9,7 +9,7 @@ type value =
   | VNil
   | VCons of value * value
   | VFun of identifier * expr * environment
-  | VRFun of (identifier * identifier * expr) list * identifier * environment
+  | VThunk of expr * environment
 and environment = {
   variables : value IdentifierMap.t
 }
@@ -32,7 +32,7 @@ let rec pp_value pf = function
       Format.fprintf pf "@[[%a" pp_value h;
       pp_list_remaining pf t
   | VFun _ -> Format.fprintf pf "@[%s@]" "<fun>"
-  | VRFun _ -> Format.fprintf pf "@[%s@]" "<rec-fun>"
+  | VThunk _ -> Format.fprintf pf "@[%s@]" "<thunk>"
 and pp_list_remaining pf = function
   | VNil ->
       Format.fprintf pf "]@]"
@@ -49,13 +49,3 @@ let empty_env = {
 let add_var v e env = {
   variables = IdentifierMap.add v e env.variables
 }
-
-let add_rec_funs lafuns env =
-  List.fold_left (fun fl_env -> function (x, _, _) ->
-    add_var x (VRFun (lafuns, x, env)) fl_env) env lafuns
-
-let rec get_from_funname lafuns funname =
-  match lafuns with
-  | [] -> raise Not_found
-  | (x, y, e) :: lafuns_tail ->
-      if x = funname then (y, e) else get_from_funname lafuns_tail funname

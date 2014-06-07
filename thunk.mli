@@ -1,4 +1,4 @@
-(* value.mli : value and evaluation environment *)
+(* thunk.mli : evaluation status for cbn *)
 open Misc
 open Expr
 
@@ -9,7 +9,7 @@ type value =
   | VNil
   | VCons of value * value
   | VFun of identifier * expr * environment
-  | VRFun of (identifier * identifier * expr) list * identifier * environment
+  | VThunk of expr * environment
 and environment = {
   variables : value IdentifierMap.t
 }
@@ -18,6 +18,3 @@ val pp_value : Format.formatter -> value -> unit
 
 val empty_env : environment
 val add_var : identifier -> value -> environment -> environment
-val add_rec_funs : (identifier * identifier * expr) list -> environment -> environment
-val get_from_funname :
-  (identifier * identifier * expr) list -> identifier -> identifier * expr

@@ -1,4 +1,5 @@
 (* type.mli : type *)
+open Misc
 open Loc
 open Expr
 open Value

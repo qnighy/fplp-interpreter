@@ -1,0 +1,16 @@
+let rec take x l =
+  if x < 1 then []
+  else
+    match l with
+    | [] -> []
+    | h :: l -> h :: take (x - 1) l;;
+let rec ones = 1 :: ones;;
+let nats =
+  let rec nats x = x :: nats (x + 1) in
+  nats 1;;
+let fibs =
+  let rec fibs a b = a :: fibs b (a + b) in
+  fibs 1 1;;
+take 10 ones;;
+take 10 nats;;
+take 10 fibs;;
