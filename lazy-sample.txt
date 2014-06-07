@@ -1,3 +1,10 @@
+let lor x y = if x then true else y;;
+let land x y = if x then y else false;;
+let rec loop = loop;;
+lor true false;;
+lor true loop;;
+land false true;;
+land false loop;;
 let rec take x l =
   if x < 1 then []
   else
