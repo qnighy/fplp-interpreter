@@ -14,3 +14,4 @@ let fibs =
 take 10 ones;;
 take 10 nats;;
 take 10 fibs;;
+take 100 fibs;;

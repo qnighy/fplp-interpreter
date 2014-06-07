@@ -159,13 +159,22 @@ let rec repl_need env lt_env lexbuf =
       ExprLexer.skip_line lexbuf;
       repl_need env lt_env lexbuf
 
+let use_cbname = ref false
+let use_cbneed = ref false
+let use_channel = ref stdin
+
+let arg_spec = [
+  "--call-by-name", Arg.Set use_cbname, "Use call-by-name";
+  "--call-by-need", Arg.Set use_cbneed, "Use call-by-need";
+]
 
 let () =
-  let lexbuf = Lexing.from_channel
-    (if Array.length Sys.argv >= 2 then
-      open_in Sys.argv.(1)
-    else
-      stdin) in
-  (* repl Value.empty_env Type.empty_local_type_env lexbuf *)
-  (* repl_cbn Thunk.empty_env Type.empty_local_type_env lexbuf *)
-  repl_need Thunk_need.empty_env Type.empty_local_type_env lexbuf
+  Arg.parse arg_spec (fun x -> use_channel := open_in x)
+    "./main [options] [<filename>]";
+  let lexbuf = Lexing.from_channel !use_channel in
+  if !use_cbname then
+    repl_cbn Thunk.empty_env Type.empty_local_type_env lexbuf
+  else if !use_cbneed then
+    repl_need Thunk_need.empty_env Type.empty_local_type_env lexbuf
+  else
+    repl Value.empty_env Type.empty_local_type_env lexbuf
