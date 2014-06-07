@@ -1,0 +1,4 @@
+- pp_ty is wrong: tuple is not ('a, 'b), but 'a * 'b
+- pp_typed_term / pp_ty: support pritty printing TVar
+- main: print more in "let rec ... ;;" command
+- type: print more about Unification_error in matching expression.
